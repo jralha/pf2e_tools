@@ -146,7 +146,15 @@ describe("enemy token helpers", () => {
 
   it("validates enemy placement bounds and overlap rules", () => {
     const existing: EnemyToken[] = [
-      { id: 1, label: "E1", sizeName: "Medium", size: 1, i: 2, j: 0 },
+      {
+        id: 1,
+        label: "E1",
+        sizeName: "Medium",
+        size: 1,
+        i: 2,
+        j: 0,
+        elevationFt: 0,
+      },
     ];
     expect(canPlaceEnemy(1, 1, 1, true, 1, existing, -4, 5, -4, 5)).toBe(true);
     expect(canPlaceEnemy(0, 0, 1, true, 1, existing, -4, 5, -4, 5)).toBe(false);
@@ -154,6 +162,50 @@ describe("enemy token helpers", () => {
     expect(canPlaceEnemy(0, 0, 1, false, 1, existing, -4, 5, -4, 5)).toBe(true);
     expect(canPlaceEnemy(2, 0, 1, true, 1, existing, -4, 5, -4, 5)).toBe(false);
     expect(canPlaceEnemy(4, 0, 2, true, 1, existing, -4, 5, -4, 5)).toBe(false);
+  });
+
+  it("accounts for enemy elevation in hit detection across emanation, burst, and cone", () => {
+    const emanation10: AoEConfig = {
+      type: "emanation",
+      tokenSize: 1,
+      sizeFt: 10,
+      direction: "E",
+    };
+    // At (2, 0), max elevation for 10 ft emanation is 5 ft
+    expect(
+      isEnemyHitByAoE({ i: 2, j: 0, size: 1, elevationFt: 5 }, emanation10),
+    ).toBe(true);
+    expect(
+      isEnemyHitByAoE({ i: 2, j: 0, size: 1, elevationFt: 10 }, emanation10),
+    ).toBe(false);
+
+    const fireball: AoEConfig = {
+      type: "burst",
+      tokenSize: 1,
+      sizeFt: 20,
+      direction: "E",
+    };
+    // At (0, 0), max elevation is 15 ft
+    expect(
+      isEnemyHitByAoE({ i: 0, j: 0, size: 1, elevationFt: 15 }, fireball),
+    ).toBe(true);
+    expect(
+      isEnemyHitByAoE({ i: 0, j: 0, size: 1, elevationFt: 20 }, fireball),
+    ).toBe(false);
+
+    const cone15E: AoEConfig = {
+      type: "cone",
+      tokenSize: 1,
+      sizeFt: 15,
+      direction: "E",
+    };
+    // At (2, 0), max elevation is 5 ft
+    expect(
+      isEnemyHitByAoE({ i: 2, j: 0, size: 1, elevationFt: 5 }, cone15E),
+    ).toBe(true);
+    expect(
+      isEnemyHitByAoE({ i: 2, j: 0, size: 1, elevationFt: 10 }, cone15E),
+    ).toBe(false);
   });
 });
 

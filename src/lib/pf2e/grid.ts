@@ -103,6 +103,8 @@ export interface EnemyToken {
   i: number;
   /** Bottom-left row coordinate (south to north). */
   j: number;
+  /** Elevation above ground in feet (0 = ground level, multiples of 5). */
+  elevationFt: number;
 }
 
 /**
@@ -533,20 +535,29 @@ export function computeEmanationGrid(
 }
 
 /**
- * Minimum PF2e distance (in feet) between the AoE origin (caster token or burst intersection)
- * and any square occupied by the enemy token.
+ * Minimum 3D PF2e distance (in feet) between the AoE origin (caster token or burst intersection)
+ * and any square occupied by the enemy token at its current elevation.
  */
 export function enemyDistanceToOrigin(
-  enemy: Pick<EnemyToken, "i" | "j" | "size">,
+  enemy: Pick<EnemyToken, "i" | "j" | "size"> & { elevationFt?: number },
   config: AoEConfig,
 ): number {
+  const z0 = Math.max(0, Math.floor((enemy.elevationFt ?? 0) / 5));
   let minDist = Infinity;
   for (let x = enemy.i; x < enemy.i + enemy.size; x++) {
     for (let y = enemy.j; y < enemy.j + enemy.size; y++) {
-      const d =
-        config.type === "burst"
-          ? pf2eIntersectionDistance(x, y, 0, 0)
-          : pf2eDistance(x, y, config.tokenSize);
+      let d: number;
+      if (config.type === "burst") {
+        const dx = x >= 0 ? x + 1 : -x;
+        const dy = y >= 0 ? y + 1 : -y;
+        const dz = z0 + 1;
+        d = pf2e3DDistance(dx, dy, dz);
+      } else {
+        const dx = Math.max(0, -x, x - config.tokenSize + 1);
+        const dy = Math.max(0, -y, y - config.tokenSize + 1);
+        const dz = Math.max(0, z0 - config.tokenSize + 1);
+        d = pf2e3DDistance(dx, dy, dz);
+      }
       if (d < minDist) minDist = d;
     }
   }
@@ -554,42 +565,34 @@ export function enemyDistanceToOrigin(
 }
 
 /**
- * Returns true if any square occupied by the enemy token falls inside the AoE.
+ * Returns true if any square occupied by the enemy token (at its elevation) falls inside the AoE.
  */
 export function isEnemyHitByAoE(
-  enemy: Pick<EnemyToken, "i" | "j" | "size">,
+  enemy: Pick<EnemyToken, "i" | "j" | "size"> & { elevationFt?: number },
   config: AoEConfig,
   includeToken = false,
 ): boolean {
-  const { type, tokenSize, sizeFt, direction } = config;
-  const coneOrigin =
-    type === "cone" ? getConeOrigin(tokenSize, direction, sizeFt) : null;
+  const { type, tokenSize, direction, sizeFt } = config;
+  const elevationFt = Math.max(0, enemy.elevationFt ?? 0);
+  const originIntersection =
+    type === "burst"
+      ? { x: 0, y: 0 }
+      : type === "cone"
+        ? getConeOrigin(tokenSize, direction, sizeFt)
+        : null;
 
   for (let x = enemy.i; x < enemy.i + enemy.size; x++) {
     for (let y = enemy.j; y < enemy.j + enemy.size; y++) {
       if (type === "emanation") {
         const inCaster = x >= 0 && x < tokenSize && y >= 0 && y < tokenSize;
-        if (inCaster) {
+        if (inCaster && elevationFt < tokenSize * 5) {
           if (includeToken) return true;
           continue;
         }
-        if (pf2eDistance(x, y, tokenSize) <= sizeFt) return true;
-      } else if (type === "burst") {
-        if (pf2eIntersectionDistance(x, y, 0, 0) <= sizeFt) return true;
-      } else if (type === "cone" && coneOrigin) {
-        if (
-          isInCone(
-            x,
-            y,
-            tokenSize,
-            coneOrigin.x,
-            coneOrigin.y,
-            direction,
-            sizeFt,
-          ).affected
-        ) {
-          return true;
-        }
+      }
+      const maxElev = computeMaxElevationFt(x, y, config, originIntersection);
+      if (maxElev !== null && elevationFt <= maxElev) {
+        return true;
       }
     }
   }

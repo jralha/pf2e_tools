@@ -223,7 +223,12 @@ export function AoEGrid({
             }
             const hit = isEnemyHitByAoE(enemy, config, includeToken);
             const pad = 0.1;
-            const fontSize = Math.min(enemy.size * 0.42, 0.55);
+            const hasElev = enemy.elevationFt > 0;
+            const fontSize = Math.min(
+              enemy.size * (hasElev ? 0.34 : 0.42),
+              hasElev ? 0.44 : 0.55,
+            );
+            const elevFontSize = Math.min(enemy.size * 0.24, 0.3);
 
             return (
               <g
@@ -260,7 +265,7 @@ export function AoEGrid({
                 />
                 <text
                   x={x + enemy.size / 2}
-                  y={y + enemy.size / 2}
+                  y={y + enemy.size * (hasElev ? 0.38 : 0.5)}
                   textAnchor="middle"
                   dominantBaseline="central"
                   fontSize={fontSize}
@@ -269,6 +274,19 @@ export function AoEGrid({
                 >
                   {enemy.label}
                 </text>
+                {hasElev && (
+                  <text
+                    x={x + enemy.size / 2}
+                    y={y + enemy.size * 0.72}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    fontSize={elevFontSize}
+                    fontWeight={600}
+                    className="fill-amber-200 pointer-events-none select-none"
+                  >
+                    ↑{enemy.elevationFt}&apos;
+                  </text>
+                )}
               </g>
             );
           })}
@@ -294,7 +312,11 @@ export function AoEGrid({
         {hoveredEnemy ? (
           <span>
             <strong className="font-semibold text-stone-900 dark:text-zinc-100">
-              {hoveredEnemy.label} ({hoveredEnemy.sizeName})
+              {hoveredEnemy.label} ({hoveredEnemy.sizeName}
+              {hoveredEnemy.elevationFt > 0
+                ? `, ↑${hoveredEnemy.elevationFt} ft`
+                : ""}
+              )
             </strong>{" "}
             · {enemyDistanceToOrigin(hoveredEnemy, config)} ft from {originLabel}{" "}
             ·{" "}

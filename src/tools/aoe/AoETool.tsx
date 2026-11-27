@@ -10,6 +10,8 @@ import {
   ArrowUpLeft,
   ArrowUpRight,
   Compass,
+  Minus,
+  Plus,
   Radar,
   Trash2,
   Users,
@@ -176,8 +178,22 @@ export default function AoETool() {
         size: enemyPlaceSize,
         i,
         j,
+        elevationFt: 0,
       },
     ]);
+  };
+
+  const handleEnemyElevationChange = (id: number, deltaFt: number) => {
+    setEnemies((prev) =>
+      prev.map((e) =>
+        e.id === id
+          ? {
+              ...e,
+              elevationFt: Math.max(0, Math.min(120, e.elevationFt + deltaFt)),
+            }
+          : e,
+      ),
+    );
   };
 
   const handleRemoveEnemy = (id: number) => {
@@ -517,7 +533,7 @@ export default function AoETool() {
                 an enemy token and check whether it&apos;s caught in the AoE.
               </p>
             ) : (
-              <ul className="divide-y divide-stone-100 dark:divide-zinc-800 max-h-48 overflow-y-auto pr-1">
+              <ul className="divide-y divide-stone-100 dark:divide-zinc-800 max-h-60 overflow-y-auto pr-1">
                 {enemySummaries.map(({ enemy, distanceFt, hit }) => (
                   <li
                     key={enemy.id}
@@ -537,7 +553,36 @@ export default function AoETool() {
                         {enemy.sizeName} · {distanceFt} ft
                       </span>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {/* Elevation stepper */}
+                      <div
+                        className="inline-flex items-center rounded-md border border-stone-200 dark:border-zinc-700 bg-stone-50 dark:bg-zinc-950"
+                        title="Enemy elevation above ground"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => handleEnemyElevationChange(enemy.id, -5)}
+                          disabled={enemy.elevationFt <= 0}
+                          aria-label={`Decrease ${enemy.label} elevation`}
+                          className="px-1 py-0.5 text-stone-500 hover:text-stone-900 dark:text-zinc-400 dark:hover:text-zinc-100 disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed"
+                        >
+                          <Minus className="h-3 w-3" />
+                        </button>
+                        <span className="px-1 min-w-[2.5rem] text-center tabular-nums font-medium text-[11px] text-stone-800 dark:text-zinc-200">
+                          ↑{enemy.elevationFt} ft
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleEnemyElevationChange(enemy.id, 5)}
+                          disabled={enemy.elevationFt >= 120}
+                          aria-label={`Increase ${enemy.label} elevation`}
+                          className="px-1 py-0.5 text-stone-500 hover:text-stone-900 dark:text-zinc-400 dark:hover:text-zinc-100 disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed"
+                        >
+                          <Plus className="h-3 w-3" />
+                        </button>
+                      </div>
+
                       <span
                         className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                           hit
