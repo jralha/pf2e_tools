@@ -1,29 +1,30 @@
 <!doctype html>
-<html>
+<html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
-    <title>PF2e Emanation Calculator</title>
-    <link
-      rel="stylesheet"
-      href="https://cdn.jsdelivr.net/npm/@stlite/browser@0.85.1/build/stlite.css"
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PF2e Tools</title>
+    <meta
+      name="description"
+      content="Fast, browser-based utility tools for Pathfinder 2nd Edition."
     />
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module">
-      import { mount } from "https://cdn.jsdelivr.net/npm/@stlite/browser@0.85.1/build/stlite.js";
-      mount(
-        {
-          requirements: ["matplotlib", "numpy"],
-          entrypoint: "pf2e_emanation.py",
-          files: {
-            "pf2e_emanation.py": { url: "./pf2e_emanation.py" },
-          },
-        },
-        document.getElementById("root"),
-      );
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("pf2e-tools-theme");
+          var theme =
+            stored === "light" || stored === "dark"
+              ? stored
+              : window.matchMedia("(prefers-color-scheme: light)").matches
+                ? "light"
+                : "dark";
+          document.documentElement.classList.toggle("dark", theme === "dark");
+        } catch (e) {}
+      })();
     </script>
+  </head>
+  <body class="bg-stone-50 text-stone-900 dark:bg-zinc-950 dark:text-zinc-100 antialiased">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

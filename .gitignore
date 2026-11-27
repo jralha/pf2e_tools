@@ -1,21 +1,23 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-*.egg-info/
+# Dependencies
+node_modules/
+
+# Build output
 dist/
-build/
+dist-ssr/
+*.local
 
-# Virtual environments
-.venv/
-venv/
-env/
+# Vite / TypeScript caches
+.vite/
+*.tsbuildinfo
 
-# Streamlit
-.streamlit/
+# Logs
+logs/
+*.log
+npm-debug.log*
 
-# OS
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
 .DS_Store
 Thumbs.db
