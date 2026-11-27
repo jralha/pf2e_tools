@@ -1,5 +1,5 @@
 import { lazy, type ComponentType, type LazyExoticComponent } from "react";
-import { Flame, Radar, Target, type LucideIcon } from "lucide-react";
+import { Dices, Flame, Radar, Target, type LucideIcon } from "lucide-react";
 
 export type ToolCategory =
   | "Combat & Grid"
@@ -51,6 +51,17 @@ export const TOOLS: readonly ToolDefinition[] = [
     icon: Flame,
     component: lazy(() => import("./dragon-breath/DragonBreathTool")),
     tags: ["3D", "Cone", "Flying"],
+  },
+  {
+    id: "damage",
+    name: "Damage Calculator",
+    shortDescription:
+      "Exact dice histograms and PF2e expected damage for Attacks and Basic Saves, with raw % input, Deadly/Fatal crits, and weakness/resistance.",
+    category: "Dice & Math",
+    path: "/tools/damage",
+    icon: Dices,
+    component: lazy(() => import("./damage/DamageTool")),
+    tags: ["DPR", "Histogram", "Crits"],
   },
   // TODO: Create a dedicated Line Calculator tool (supporting PF2e arbitrary-angle / grid line rules).
 ];

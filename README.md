@@ -7,6 +7,7 @@ A fast, client-side collection of utility tools for **Pathfinder 2nd Edition**, 
 - **AoE Calculator** (`/#/tools/aoe`) — Interactive 5-foot grid visualizer for PF2e **Emanations**, **Bursts**, and **Cones** across all standard token sizes, with enemy token placement, max elevation overlay, and live hit detection using the alternating 5/10/5/10 diagonal rule.
 - **Airburst Calculator** (`/#/tools/airburst`) — Calculates the ground-level burst footprint when detonating a burst in mid-air, with side-view cross-section and top-down ground plots.
 - **Dragon Breath Calculator** (`/#/tools/dragon-breath`) — Calculates the effective ground burst when a flying creature aims a breath cone straight down, with side-view cross-section and top-down ground plots.
+- **Damage Calculator** (`/#/tools/damage`) — Basic dice expression histogram (`2d6 + 2`) and Advanced PF2e Attack/Basic Save DPR calculator with raw probability input, Deadly/Fatal crits, and weakness/resistance.
 
 ## TODO
 
