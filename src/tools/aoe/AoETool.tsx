@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   ArrowDown,
   ArrowDownLeft,
@@ -9,28 +9,39 @@ import {
   ArrowUp,
   ArrowUpLeft,
   ArrowUpRight,
+  BrickWall,
   Compass,
-  Minus,
-  Plus,
   Radar,
   Trash2,
   Users,
-  X,
   type LucideIcon,
 } from "lucide-react";
 import {
+  DIRECTION_VECTORS,
   TOKEN_SIZES,
   TOKEN_SIZE_MAP,
   computeAoEGrid,
   enemyDistanceToOrigin,
   isEnemyHitByAoE,
+  wallKey,
   type AoEConfig,
   type AoEType,
   type Direction,
   type EnemyToken,
   type TokenSizeName,
 } from "../../lib/pf2e/grid";
-import { AoEGrid } from "./AoEGrid";
+import {
+  decodeEnemies,
+  decodeWalls,
+  encodeEnemies,
+  encodeWalls,
+  parseSteppedInt,
+  parseTokenSize,
+} from "../../lib/urlState";
+import { ShareLinkButton } from "../../components/ShareLinkButton";
+import { CopyImageButton } from "../../components/CopyImageButton";
+import { EnemyTokensCard } from "../../components/EnemyTokensCard";
+import { AoEGrid, type MapInteractMode } from "./AoEGrid";
 
 interface AoETypeMeta {
   id: AoEType;
@@ -91,17 +102,82 @@ const COMPASS_GRID: readonly (
   { dir: "SE", icon: ArrowDownRight },
 ];
 
-export default function AoETool() {
-  const [aoeType, setAoeType] = useState<AoEType>("emanation");
-  const [sizeLabel, setSizeLabel] = useState<TokenSizeName>("Medium");
-  const [sizeFt, setSizeFt] = useState<number>(10);
-  const [direction, setDirection] = useState<Direction>("E");
-  const [includeToken, setIncludeToken] = useState<boolean>(false);
-  const [showElevation, setShowElevation] = useState<boolean>(false);
+const VALID_AOE_TYPES = new Set<string>(["emanation", "burst", "cone"]);
+const VALID_DIRECTIONS = new Set<string>(Object.keys(DIRECTION_VECTORS));
 
+export default function AoETool() {
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const initialType: AoEType = VALID_AOE_TYPES.has(searchParams.get("t") ?? "")
+    ? (searchParams.get("t") as AoEType)
+    : "emanation";
+  const initialMeta =
+    AOE_TYPES.find((t) => t.id === initialType) ?? AOE_TYPES[0];
+  const initialEnemies = useMemo(
+    () => decodeEnemies(searchParams.get("en")),
+    // Only hydrate on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  const [aoeType, setAoeType] = useState<AoEType>(initialType);
+  const [sizeLabel, setSizeLabel] = useState<TokenSizeName>(() =>
+    parseTokenSize(searchParams.get("c"), "Medium"),
+  );
+  const [sizeFt, setSizeFt] = useState<number>(() =>
+    parseSteppedInt(
+      searchParams.get("s"),
+      initialMeta.minFt,
+      initialMeta.maxFt,
+      5,
+      initialMeta.defaultFt,
+    ),
+  );
+  const [direction, setDirection] = useState<Direction>(() => {
+    const raw = searchParams.get("d");
+    return raw && VALID_DIRECTIONS.has(raw) ? (raw as Direction) : "E";
+  });
+  const [includeToken, setIncludeToken] = useState<boolean>(
+    () => searchParams.get("inc") === "1",
+  );
+  const [showElevation, setShowElevation] = useState<boolean>(
+    () => searchParams.get("elev") === "1",
+  );
+
+  const [interactMode, setInteractMode] = useState<MapInteractMode>("enemy");
   const [enemySizeLabel, setEnemySizeLabel] = useState<TokenSizeName>("Medium");
-  const [enemies, setEnemies] = useState<EnemyToken[]>([]);
-  const nextEnemyId = useRef(1);
+  const [enemies, setEnemies] = useState<EnemyToken[]>(initialEnemies);
+  const [walls, setWalls] = useState<Set<string>>(() =>
+    decodeWalls(searchParams.get("w")),
+  );
+  const nextEnemyId = useRef(
+    initialEnemies.reduce((max, e) => Math.max(max, e.id), 0) + 1,
+  );
+  const gridSvgRef = useRef<SVGSVGElement | null>(null);
+
+  // Sync state to URL query params for easy sharing
+  useEffect(() => {
+    const next = new URLSearchParams();
+    next.set("t", aoeType);
+    next.set("s", String(sizeFt));
+    if (aoeType !== "burst") next.set("c", sizeLabel);
+    if (aoeType === "cone") next.set("d", direction);
+    if (aoeType === "emanation" && includeToken) next.set("inc", "1");
+    if (showElevation) next.set("elev", "1");
+    if (enemies.length > 0) next.set("en", encodeEnemies(enemies));
+    if (walls.size > 0) next.set("w", encodeWalls(walls));
+    setSearchParams(next, { replace: true });
+  }, [
+    aoeType,
+    sizeFt,
+    sizeLabel,
+    direction,
+    includeToken,
+    showElevation,
+    enemies,
+    walls,
+    setSearchParams,
+  ]);
 
   const meta = AOE_TYPES.find((t) => t.id === aoeType) ?? AOE_TYPES[0];
   const tokenSize = TOKEN_SIZE_MAP[sizeLabel];
@@ -113,8 +189,9 @@ export default function AoETool() {
       tokenSize,
       sizeFt,
       direction,
+      walls,
     }),
-    [aoeType, tokenSize, sizeFt, direction],
+    [aoeType, tokenSize, sizeFt, direction, walls],
   );
 
   const grid = useMemo(() => computeAoEGrid(config), [config]);
@@ -125,11 +202,15 @@ export default function AoETool() {
 
   const enemySummaries = useMemo(
     () =>
-      enemies.map((enemy) => ({
-        enemy,
-        distanceFt: enemyDistanceToOrigin(enemy, config),
-        hit: isEnemyHitByAoE(enemy, config, effectiveIncludeToken),
-      })),
+      enemies.map((enemy) => {
+        const distanceFt = enemyDistanceToOrigin(enemy, config);
+        const hit = isEnemyHitByAoE(enemy, config, effectiveIncludeToken);
+        return {
+          enemy,
+          subtitle: `${enemy.sizeName} · ${distanceFt} ft`,
+          hit,
+        };
+      }),
     [enemies, config, effectiveIncludeToken],
   );
 
@@ -149,13 +230,26 @@ export default function AoETool() {
         ),
     );
 
+  const filterWallsOverlappingCaster = (
+    prev: Set<string>,
+    casterSize: number,
+  ): Set<string> => {
+    const next = new Set(prev);
+    for (let x = 0; x < casterSize; x++) {
+      for (let y = 0; y < casterSize; y++) {
+        next.delete(wallKey(x, y));
+      }
+    }
+    return next;
+  };
+
   const handleAoETypeChange = (nextType: AoEType) => {
     const nextMeta = AOE_TYPES.find((t) => t.id === nextType) ?? AOE_TYPES[0];
     setAoeType(nextType);
     setSizeFt(nextMeta.defaultFt);
-    // If switching from burst (no caster) to a caster-origin AoE, remove enemies overlapping the caster
     if (nextType !== "burst") {
       setEnemies((prev) => filterOverlappingCaster(prev, tokenSize));
+      setWalls((prev) => filterWallsOverlappingCaster(prev, tokenSize));
     }
   };
 
@@ -164,6 +258,7 @@ export default function AoETool() {
     setSizeLabel(newSizeLabel);
     if (aoeType !== "burst") {
       setEnemies((prev) => filterOverlappingCaster(prev, newCasterSize));
+      setWalls((prev) => filterWallsOverlappingCaster(prev, newCasterSize));
     }
   };
 
@@ -205,6 +300,20 @@ export default function AoETool() {
     nextEnemyId.current = 1;
   };
 
+  const handleSetWall = (i: number, j: number, add: boolean) => {
+    const key = wallKey(i, j);
+    setWalls((prev) => {
+      if (add && prev.has(key)) return prev;
+      if (!add && !prev.has(key)) return prev;
+      const next = new Set(prev);
+      if (add) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  };
+
+  const handleClearWalls = () => setWalls(new Set());
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -217,18 +326,40 @@ export default function AoETool() {
           Back to All Tools
         </Link>
 
-        <div className="flex items-center gap-3">
-          <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-crimson-600/10 text-crimson-700 dark:bg-crimson-600/20 dark:text-gold-400 ring-1 ring-crimson-600/15 dark:ring-gold-500/20">
-            <Radar className="h-5 w-5" />
-          </span>
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-stone-900 dark:text-zinc-50">
-              PF2e AoE Calculator
-            </h1>
-            <p className="text-sm text-stone-600 dark:text-zinc-400">
-              Emanations, Bursts &amp; Cones · 5-foot grid ·
-              alternating-diagonal rule
-            </p>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-crimson-600/10 text-crimson-700 dark:bg-crimson-600/20 dark:text-gold-400 ring-1 ring-crimson-600/15 dark:ring-gold-500/20">
+              <Radar className="h-5 w-5" />
+            </span>
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-stone-900 dark:text-zinc-50">
+                PF2e AoE Calculator
+              </h1>
+              <p className="text-sm text-stone-600 dark:text-zinc-400">
+                Emanations, Bursts &amp; Cones · 5-foot grid ·
+                alternating-diagonal rule
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <CopyImageButton
+              svgRef={gridSvgRef}
+              title={
+                aoeType === "burst"
+                  ? `${sizeFt} ft Burst`
+                  : aoeType === "emanation"
+                    ? `${sizeLabel} (${tokenSize}×${tokenSize}) — ${sizeFt} ft Emanation`
+                    : `${sizeLabel} (${tokenSize}×${tokenSize}) — ${sizeFt} ft Cone (${direction})`
+              }
+              subtitle={`${totalSquares} squares affected${
+                enemies.length > 0
+                  ? ` · ${enemiesHitCount}/${enemies.length} enemies hit`
+                  : ""
+              }`}
+              filename={`pf2e-${aoeType}-${sizeFt}ft.png`}
+            />
+            <ShareLinkButton />
           </div>
         </div>
       </div>
@@ -331,7 +462,7 @@ export default function AoETool() {
               </p>
             </div>
 
-            {/* Caster Token Size (Emanation, Cone, Line) */}
+            {/* Caster Token Size (Emanation, Cone) */}
             {aoeType !== "burst" && (
               <div className="space-y-2">
                 <label
@@ -442,6 +573,51 @@ export default function AoETool() {
               </div>
             )}
 
+            {/* Map Brush Mode (Enemies vs Walls) */}
+            <div className="space-y-2 pt-2 border-t border-stone-100 dark:border-zinc-800">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-stone-800 dark:text-zinc-200">
+                  Map Click Mode
+                </span>
+                {walls.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleClearWalls}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-stone-500 hover:text-crimson-600 hover:bg-stone-100 dark:text-zinc-400 dark:hover:text-crimson-400 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                    Clear walls ({walls.size})
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setInteractMode("enemy")}
+                  className={`inline-flex items-center justify-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                    interactMode === "enemy"
+                      ? "border-crimson-600 bg-crimson-600 text-white dark:border-gold-500 dark:bg-gold-500 dark:text-zinc-950"
+                      : "border-stone-200 dark:border-zinc-800 bg-stone-50 dark:bg-zinc-950 text-stone-700 dark:text-zinc-300 hover:bg-stone-100 dark:hover:bg-zinc-800"
+                  }`}
+                >
+                  <Users className="h-3.5 w-3.5" />
+                  Place Enemies
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInteractMode("wall")}
+                  className={`inline-flex items-center justify-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                    interactMode === "wall"
+                      ? "border-crimson-600 bg-crimson-600 text-white dark:border-gold-500 dark:bg-gold-500 dark:text-zinc-950"
+                      : "border-stone-200 dark:border-zinc-800 bg-stone-50 dark:bg-zinc-950 text-stone-700 dark:text-zinc-300 hover:bg-stone-100 dark:hover:bg-zinc-800"
+                  }`}
+                >
+                  <BrickWall className="h-3.5 w-3.5" />
+                  Paint Walls
+                </button>
+              </div>
+            </div>
+
             {/* Show Max Elevation Toggle */}
             <label className="flex items-start gap-3 pt-2 border-t border-stone-100 dark:border-zinc-800 cursor-pointer">
               <input
@@ -484,128 +660,15 @@ export default function AoETool() {
           </div>
 
           {/* Enemy Tokens Card */}
-          <div className="rounded-xl border border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/70 p-5 shadow-xs space-y-4">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Users className="h-4 w-4 text-crimson-600 dark:text-gold-400" />
-                <h2 className="text-sm font-semibold text-stone-900 dark:text-zinc-100">
-                  Enemy Tokens
-                </h2>
-              </div>
-              {enemies.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handleClearEnemies}
-                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-stone-500 hover:text-crimson-600 hover:bg-stone-100 dark:text-zinc-400 dark:hover:text-crimson-400 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  Clear all
-                </button>
-              )}
-            </div>
-
-            <div className="space-y-1.5">
-              <label
-                htmlFor="enemy-size"
-                className="block text-xs font-medium text-stone-600 dark:text-zinc-400"
-              >
-                Enemy Size to Drop (click map to place)
-              </label>
-              <select
-                id="enemy-size"
-                value={enemySizeLabel}
-                onChange={(e) =>
-                  setEnemySizeLabel(e.target.value as TokenSizeName)
-                }
-                className="w-full rounded-lg border border-stone-300 dark:border-zinc-700 bg-stone-50 dark:bg-zinc-950 px-3 py-1.5 text-sm text-stone-900 dark:text-zinc-100 focus:border-crimson-600 dark:focus:border-gold-400 focus:outline-none"
-              >
-                {TOKEN_SIZES.map((size) => (
-                  <option key={size.name} value={size.name}>
-                    {size.name} — {size.feetLabel}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {enemySummaries.length === 0 ? (
-              <p className="text-xs text-stone-500 dark:text-zinc-400">
-                No enemies placed yet. Click any open square on the grid to drop
-                an enemy token and check whether it&apos;s caught in the AoE.
-              </p>
-            ) : (
-              <ul className="divide-y divide-stone-100 dark:divide-zinc-800 max-h-60 overflow-y-auto pr-1">
-                {enemySummaries.map(({ enemy, distanceFt, hit }) => (
-                  <li
-                    key={enemy.id}
-                    className="py-2 flex items-center justify-between gap-2 text-xs"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span
-                        className={`inline-flex h-5 w-7 shrink-0 items-center justify-center rounded font-bold text-[11px] text-white ${
-                          hit
-                            ? "bg-crimson-600"
-                            : "bg-slate-600 dark:bg-zinc-600"
-                        }`}
-                      >
-                        {enemy.label}
-                      </span>
-                      <span className="truncate text-stone-700 dark:text-zinc-300">
-                        {enemy.sizeName} · {distanceFt} ft
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {/* Elevation stepper */}
-                      <div
-                        className="inline-flex items-center rounded-md border border-stone-200 dark:border-zinc-700 bg-stone-50 dark:bg-zinc-950"
-                        title="Enemy elevation above ground"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => handleEnemyElevationChange(enemy.id, -5)}
-                          disabled={enemy.elevationFt <= 0}
-                          aria-label={`Decrease ${enemy.label} elevation`}
-                          className="px-1 py-0.5 text-stone-500 hover:text-stone-900 dark:text-zinc-400 dark:hover:text-zinc-100 disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed"
-                        >
-                          <Minus className="h-3 w-3" />
-                        </button>
-                        <span className="px-1 min-w-[2.5rem] text-center tabular-nums font-medium text-[11px] text-stone-800 dark:text-zinc-200">
-                          ↑{enemy.elevationFt} ft
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => handleEnemyElevationChange(enemy.id, 5)}
-                          disabled={enemy.elevationFt >= 120}
-                          aria-label={`Increase ${enemy.label} elevation`}
-                          className="px-1 py-0.5 text-stone-500 hover:text-stone-900 dark:text-zinc-400 dark:hover:text-zinc-100 disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed"
-                        >
-                          <Plus className="h-3 w-3" />
-                        </button>
-                      </div>
-
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                          hit
-                            ? "bg-crimson-600/15 text-crimson-700 dark:bg-crimson-500/20 dark:text-crimson-300"
-                            : "bg-stone-100 text-stone-600 dark:bg-zinc-800 dark:text-zinc-400"
-                        }`}
-                      >
-                        {hit ? "Hit" : "Safe"}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveEnemy(enemy.id)}
-                        aria-label={`Remove ${enemy.label}`}
-                        className="p-0.5 rounded text-stone-400 hover:text-stone-700 dark:hover:text-zinc-200 cursor-pointer"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+          <EnemyTokensCard
+            items={enemySummaries}
+            enemySizeLabel={enemySizeLabel}
+            onEnemySizeChange={setEnemySizeLabel}
+            onElevationChange={handleEnemyElevationChange}
+            onRemoveEnemy={handleRemoveEnemy}
+            onClearEnemies={handleClearEnemies}
+            emptyHint="No enemies placed yet. Switch to Place Enemies and click any open square on the grid."
+          />
         </div>
 
         {/* SVG Grid */}
@@ -615,11 +678,15 @@ export default function AoETool() {
             sizeLabel={sizeLabel}
             includeToken={effectiveIncludeToken}
             showElevation={showElevation}
+            interactMode={interactMode}
             grid={grid}
             enemies={enemies}
+            walls={walls}
             enemyPlaceSize={enemyPlaceSize}
             onPlaceEnemy={handlePlaceEnemy}
             onRemoveEnemy={handleRemoveEnemy}
+            onSetWall={handleSetWall}
+            svgRef={gridSvgRef}
           />
         </div>
       </div>

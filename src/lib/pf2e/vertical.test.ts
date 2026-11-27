@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { computeAirburst, computeDragonBreath } from "./vertical";
+import {
+  computeAirburst,
+  computeDragonBreath,
+  isEnemyHitByAirburst,
+  isEnemyHitByDragonBreath,
+} from "./vertical";
 
 describe("computeAirburst", () => {
   it("matches full ground burst at 0 ft and 5 ft origin height", () => {
@@ -77,5 +82,35 @@ describe("computeDragonBreath", () => {
     expect(at30.effectiveGroundRadiusFt).toBe(5);
     // 35 ft height -> misses ground
     expect(computeDragonBreath(30, 35).groundSquaresHit).toBe(0);
+  });
+});
+
+describe("3D enemy hit detection for Airburst and Dragon Breath", () => {
+  it("detects ground and flying enemies in an Airburst", () => {
+    // 20-ft burst at 20 ft height -> 5-ft ground burst (0,0 hit; 1,0 missed at ground)
+    expect(
+      isEnemyHitByAirburst({ i: 0, j: 0, size: 1, elevationFt: 0 }, 20, 20),
+    ).toBe(true);
+    expect(
+      isEnemyHitByAirburst({ i: 1, j: 0, size: 1, elevationFt: 0 }, 20, 20),
+    ).toBe(false);
+    // Same enemy at (1, 0) flying at 15 ft elevation IS hit by the wider mid-air slice
+    expect(
+      isEnemyHitByAirburst({ i: 1, j: 0, size: 1, elevationFt: 15 }, 20, 20),
+    ).toBe(true);
+  });
+
+  it("detects ground and flying enemies in a Dragon Breath", () => {
+    // 30-ft cone aimed down from 30 ft -> 5-ft ground burst (0,0 hit; 1,0 missed on ground)
+    expect(
+      isEnemyHitByDragonBreath({ i: 0, j: 0, size: 1, elevationFt: 0 }, 30, 30),
+    ).toBe(true);
+    expect(
+      isEnemyHitByDragonBreath({ i: 1, j: 0, size: 1, elevationFt: 0 }, 30, 30),
+    ).toBe(false);
+    // Same enemy at (1, 0) flying at 10 ft elevation (dz = 4 -> 20-ft burst slice!) IS hit
+    expect(
+      isEnemyHitByDragonBreath({ i: 1, j: 0, size: 1, elevationFt: 10 }, 30, 30),
+    ).toBe(true);
   });
 });

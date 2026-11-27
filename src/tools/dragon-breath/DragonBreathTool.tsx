@@ -1,7 +1,23 @@
-import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Flame } from "lucide-react";
-import { computeDragonBreath } from "../../lib/pf2e/vertical";
+import {
+  TOKEN_SIZE_MAP,
+  type EnemyToken,
+  type TokenSizeName,
+} from "../../lib/pf2e/grid";
+import {
+  computeDragonBreath,
+  isEnemyHitByDragonBreath,
+} from "../../lib/pf2e/vertical";
+import {
+  decodeEnemies,
+  encodeEnemies,
+  parseSteppedInt,
+} from "../../lib/urlState";
+import { ShareLinkButton } from "../../components/ShareLinkButton";
+import { CopyImageButton } from "../../components/CopyImageButton";
+import { EnemyTokensCard } from "../../components/EnemyTokensCard";
 import { SideViewGrid } from "../../components/grids/SideViewGrid";
 import { GroundFootprintGrid } from "../../components/grids/GroundFootprintGrid";
 
@@ -9,13 +25,98 @@ const CONE_PRESETS = [15, 30, 45, 60] as const;
 const HEIGHT_PRESETS = [5, 10, 15, 20, 30, 45, 60] as const;
 
 export default function DragonBreathTool() {
-  const [coneLengthFt, setConeLengthFt] = useState<number>(30);
-  const [dragonHeightFt, setDragonHeightFt] = useState<number>(20);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const initialEnemies = useMemo(
+    () => decodeEnemies(searchParams.get("en")),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  const [coneLengthFt, setConeLengthFt] = useState<number>(() =>
+    parseSteppedInt(searchParams.get("c"), 15, 120, 5, 30),
+  );
+  const [dragonHeightFt, setDragonHeightFt] = useState<number>(() =>
+    parseSteppedInt(searchParams.get("h"), 5, 120, 5, 20),
+  );
+  const [enemySizeLabel, setEnemySizeLabel] = useState<TokenSizeName>("Medium");
+  const [enemies, setEnemies] = useState<EnemyToken[]>(initialEnemies);
+  const nextEnemyId = useRef(
+    initialEnemies.reduce((max, e) => Math.max(max, e.id), 0) + 1,
+  );
+  const sideSvgRef = useRef<SVGSVGElement | null>(null);
+  const groundSvgRef = useRef<SVGSVGElement | null>(null);
+
+  useEffect(() => {
+    const next = new URLSearchParams();
+    next.set("c", String(coneLengthFt));
+    next.set("h", String(dragonHeightFt));
+    if (enemies.length > 0) next.set("en", encodeEnemies(enemies));
+    setSearchParams(next, { replace: true });
+  }, [coneLengthFt, dragonHeightFt, enemies, setSearchParams]);
 
   const result = useMemo(
     () => computeDragonBreath(coneLengthFt, dragonHeightFt),
     [coneLengthFt, dragonHeightFt],
   );
+
+  const enemyPlaceSize = TOKEN_SIZE_MAP[enemySizeLabel];
+
+  const checkEnemyHit = useCallback(
+    (enemy: EnemyToken) =>
+      isEnemyHitByDragonBreath(enemy, coneLengthFt, dragonHeightFt),
+    [coneLengthFt, dragonHeightFt],
+  );
+
+  const enemySummaries = useMemo(
+    () =>
+      enemies.map((enemy) => ({
+        enemy,
+        subtitle: `${enemy.sizeName} · (${enemy.i}, ${enemy.j})`,
+        hit: checkEnemyHit(enemy),
+      })),
+    [enemies, checkEnemyHit],
+  );
+
+  const enemiesHitCount = enemySummaries.filter((e) => e.hit).length;
+
+  const handlePlaceEnemy = (i: number, j: number) => {
+    const id = nextEnemyId.current++;
+    setEnemies((prev) => [
+      ...prev,
+      {
+        id,
+        label: `E${id}`,
+        sizeName: enemySizeLabel,
+        size: enemyPlaceSize,
+        i,
+        j,
+        elevationFt: 0,
+      },
+    ]);
+  };
+
+  const handleEnemyElevationChange = (id: number, deltaFt: number) => {
+    setEnemies((prev) =>
+      prev.map((e) =>
+        e.id === id
+          ? {
+              ...e,
+              elevationFt: Math.max(0, Math.min(120, e.elevationFt + deltaFt)),
+            }
+          : e,
+      ),
+    );
+  };
+
+  const handleRemoveEnemy = (id: number) => {
+    setEnemies((prev) => prev.filter((e) => e.id !== id));
+  };
+
+  const handleClearEnemies = () => {
+    setEnemies([]);
+    nextEnemyId.current = 1;
+  };
 
   return (
     <div className="space-y-6">
@@ -29,18 +130,44 @@ export default function DragonBreathTool() {
           Back to All Tools
         </Link>
 
-        <div className="flex items-center gap-3">
-          <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-crimson-600/10 text-crimson-700 dark:bg-crimson-600/20 dark:text-gold-400 ring-1 ring-crimson-600/15 dark:ring-gold-500/20">
-            <Flame className="h-5 w-5" />
-          </span>
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-stone-900 dark:text-zinc-50">
-              PF2e Dragon Breath Calculator
-            </h1>
-            <p className="text-sm text-stone-600 dark:text-zinc-400">
-              Aim a breath weapon cone straight down from above to find the
-              effective ground burst
-            </p>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-crimson-600/10 text-crimson-700 dark:bg-crimson-600/20 dark:text-gold-400 ring-1 ring-crimson-600/15 dark:ring-gold-500/20">
+              <Flame className="h-5 w-5" />
+            </span>
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-stone-900 dark:text-zinc-50">
+                PF2e Dragon Breath Calculator
+              </h1>
+              <p className="text-sm text-stone-600 dark:text-zinc-400">
+                Aim a breath weapon cone straight down from above to find the
+                effective ground burst
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <CopyImageButton
+              panels={[
+                { svgRef: sideSvgRef, label: "Side-View Cross-Section" },
+                {
+                  svgRef: groundSvgRef,
+                  label: "Effective Ground Burst Footprint",
+                },
+              ]}
+              title={`${coneLengthFt} ft Dragon Breath from ${dragonHeightFt} ft Height`}
+              subtitle={
+                result.groundSquaresHit > 0
+                  ? `Ground burst: ${result.groundWidthFt} ft wide (${result.effectiveGroundRadiusFt} ft radius, ${result.groundSquaresHit} sq)${
+                      enemies.length > 0
+                        ? ` · ${enemiesHitCount}/${enemies.length} enemies hit`
+                        : ""
+                    }`
+                  : "Too high — misses ground level"
+              }
+              filename={`pf2e-dragon-breath-${coneLengthFt}ft-from-${dragonHeightFt}ft.png`}
+            />
+            <ShareLinkButton />
           </div>
         </div>
       </div>
@@ -50,23 +177,44 @@ export default function DragonBreathTool() {
         <div className="lg:col-span-5 space-y-5">
           {/* Metric Summary */}
           <div className="rounded-xl border border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/70 p-5 shadow-xs">
-            <div className="text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-zinc-400">
-              Effective Ground Footprint
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-zinc-400">
+                  Effective Ground Footprint
+                </div>
+                {result.groundSquaresHit > 0 ? (
+                  <div className="mt-1 flex items-baseline gap-2.5">
+                    <span className="text-4xl font-bold tabular-nums text-crimson-700 dark:text-gold-400">
+                      {result.groundWidthFt} ft
+                    </span>
+                    <span className="text-sm text-stone-500 dark:text-zinc-400">
+                      wide ({result.effectiveGroundRadiusFt} ft radius)
+                    </span>
+                  </div>
+                ) : (
+                  <div className="mt-1 text-2xl font-bold text-stone-400 dark:text-zinc-500">
+                    Too high — misses ground
+                  </div>
+                )}
+              </div>
+
+              {enemies.length > 0 && (
+                <div className="text-right">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-zinc-400">
+                    Enemies Hit
+                  </div>
+                  <div className="mt-1 text-2xl font-bold tabular-nums text-stone-900 dark:text-zinc-100">
+                    <span className="text-crimson-600 dark:text-crimson-400">
+                      {enemiesHitCount}
+                    </span>
+                    <span className="text-base font-normal text-stone-400 dark:text-zinc-500">
+                      {" "}
+                      / {enemies.length}
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
-            {result.groundSquaresHit > 0 ? (
-              <div className="mt-1 flex items-baseline gap-2.5">
-                <span className="text-4xl font-bold tabular-nums text-crimson-700 dark:text-gold-400">
-                  {result.groundWidthFt} ft
-                </span>
-                <span className="text-sm text-stone-500 dark:text-zinc-400">
-                  wide ({result.effectiveGroundRadiusFt} ft radius)
-                </span>
-              </div>
-            ) : (
-              <div className="mt-1 text-2xl font-bold text-stone-400 dark:text-zinc-500">
-                Too high — misses ground
-              </div>
-            )}
 
             <div className="mt-3 pt-3 border-t border-stone-100 dark:border-zinc-800 space-y-1.5 text-xs text-stone-600 dark:text-zinc-400">
               <div>
@@ -78,7 +226,8 @@ export default function DragonBreathTool() {
               </div>
               <p className="text-[11px] text-stone-500 dark:text-zinc-500">
                 Note: Ground footprint counts Small/Medium targets at ground
-                level (0–5 ft).
+                level (0–5 ft). Placed enemies check full 3D height &amp;
+                elevation.
               </p>
             </div>
           </div>
@@ -175,6 +324,17 @@ export default function DragonBreathTool() {
               </p>
             </div>
           </div>
+
+          {/* Enemy Tokens Card */}
+          <EnemyTokensCard
+            items={enemySummaries}
+            enemySizeLabel={enemySizeLabel}
+            onEnemySizeChange={setEnemySizeLabel}
+            onElevationChange={handleEnemyElevationChange}
+            onRemoveEnemy={handleRemoveEnemy}
+            onClearEnemies={handleClearEnemies}
+            emptyHint="Click any open square on the top-down ground footprint to drop an enemy and test ground or flying hits."
+          />
         </div>
 
         {/* Plots */}
@@ -183,10 +343,17 @@ export default function DragonBreathTool() {
             title={`${coneLengthFt} ft Cone Aimed Down from ${dragonHeightFt} ft`}
             originLabel="Dragon origin"
             result={result}
+            svgRef={sideSvgRef}
           />
           <GroundFootprintGrid
             title="Effective Ground Burst Footprint"
             result={result}
+            enemies={enemies}
+            enemyPlaceSize={enemyPlaceSize}
+            isEnemyHit={checkEnemyHit}
+            onPlaceEnemy={handlePlaceEnemy}
+            onRemoveEnemy={handleRemoveEnemy}
+            svgRef={groundSvgRef}
           />
         </div>
       </div>

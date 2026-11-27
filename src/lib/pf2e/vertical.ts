@@ -1,4 +1,8 @@
-import { pf2e3DDistance, pf2eIntersectionDistance } from "./grid";
+import {
+  pf2e3DDistance,
+  pf2eIntersectionDistance,
+  type EnemyToken,
+} from "./grid";
 
 export type SideCellKind = "empty" | "air" | "ground-hit";
 
@@ -261,4 +265,93 @@ export function computeDragonBreath(
     effectiveGroundRadiusFt,
     groundWidthFt: maxGroundReachSq * 10,
   };
+}
+
+/**
+ * Returns true if any 5-ft cube occupied by an enemy token (horizontal footprint × vertical height)
+ * is hit by an Airburst of `radiusFt` detonated at `originHeightFt`.
+ */
+export function isEnemyHitByAirburst(
+  enemy: Pick<EnemyToken, "i" | "j" | "size" | "elevationFt">,
+  radiusFt: number,
+  originHeightFt: number,
+): boolean {
+  const radiusSq = Math.floor(radiusFt / 5);
+  const h = Math.max(0, Math.floor(originHeightFt / 5));
+  const z0 = Math.max(0, Math.floor(enemy.elevationFt / 5));
+
+  for (let z = z0; z < z0 + enemy.size; z++) {
+    const dz = z >= h ? z - h + 1 : h - z;
+    let sliceReachSq = 0;
+    for (let dx = 1; dx <= radiusSq; dx++) {
+      if (pf2e3DDistance(dx, 1, dz) <= radiusFt) {
+        sliceReachSq = dx;
+      }
+    }
+    const sliceRadiusFt = sliceReachSq * 5;
+    if (sliceRadiusFt <= 0) continue;
+
+    for (let x = enemy.i; x < enemy.i + enemy.size; x++) {
+      for (let y = enemy.j; y < enemy.j + enemy.size; y++) {
+        if (pf2eIntersectionDistance(x, y, 0, 0) <= sliceRadiusFt) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Returns true if any 5-ft cube occupied by an enemy token (horizontal footprint × vertical height)
+ * is hit by a downward Dragon Breath cone of `coneLengthFt` originating at `originHeightFt`.
+ */
+export function isEnemyHitByDragonBreath(
+  enemy: Pick<EnemyToken, "i" | "j" | "size" | "elevationFt">,
+  coneLengthFt: number,
+  originHeightFt: number,
+): boolean {
+  const lengthSq = Math.floor(coneLengthFt / 5);
+  const h = Math.max(1, Math.floor(originHeightFt / 5));
+  const z0 = Math.max(0, Math.floor(enemy.elevationFt / 5));
+  const is15Ft = coneLengthFt === 15;
+
+  for (let z = z0; z < z0 + enemy.size; z++) {
+    const dz = h - z;
+    if (dz < 1) continue;
+
+    if (is15Ft) {
+      for (let x = enemy.i; x < enemy.i + enemy.size; x++) {
+        for (let y = enemy.j; y < enemy.j + enemy.size; y++) {
+          const perpX = Math.abs(x);
+          const perpY = Math.abs(y);
+          if (
+            (dz === 1 && perpX === 0 && perpY === 0) ||
+            ((dz === 2 || dz === 3) && perpX <= 1 && perpY <= 1)
+          ) {
+            return true;
+          }
+        }
+      }
+      continue;
+    }
+
+    let sliceReachSq = 0;
+    for (let dx = 1; dx <= Math.min(dz, lengthSq); dx++) {
+      if (pf2e3DDistance(dx, 1, dz) <= coneLengthFt) {
+        sliceReachSq = dx;
+      }
+    }
+    const sliceRadiusFt = sliceReachSq * 5;
+    if (sliceRadiusFt <= 0) continue;
+
+    for (let x = enemy.i; x < enemy.i + enemy.size; x++) {
+      for (let y = enemy.j; y < enemy.j + enemy.size; y++) {
+        if (pf2eIntersectionDistance(x, y, 0, 0) <= sliceRadiusFt) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }

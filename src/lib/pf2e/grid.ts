@@ -45,7 +45,7 @@ export const DIRECTION_VECTORS: Record<Direction, readonly [number, number]> = {
   NW: [-1, 1],
 };
 
-export type CellKind = "empty" | "token" | "affected";
+export type CellKind = "empty" | "token" | "affected" | "wall" | "blocked";
 
 export interface GridCell {
   /** Column coordinate in 5-ft grid units (west to east). */
@@ -77,6 +77,8 @@ export interface AoEConfig {
   sizeFt: number;
   /** Direction for cone templates. */
   direction: Direction;
+  /** Optional set of wall square keys ("i,j") that block Line of Effect. */
+  walls?: ReadonlySet<string>;
 }
 
 export interface AoEGridResult {
@@ -105,6 +107,119 @@ export interface EnemyToken {
   j: number;
   /** Elevation above ground in feet (0 = ground level, multiples of 5). */
   elevationFt: number;
+}
+
+export function wallKey(i: number, j: number): string {
+  return `${i},${j}`;
+}
+
+export function parseWallKey(key: string): [number, number] | null {
+  const parts = key.split(",");
+  if (parts.length !== 2) return null;
+  const i = Number(parts[0]);
+  const j = Number(parts[1]);
+  if (!Number.isInteger(i) || !Number.isInteger(j)) return null;
+  return [i, j];
+}
+
+/**
+ * Returns true if the line segment (x0, y0) -> (x1, y1) enters the interior
+ * of the unit square [wx, wx + 1] × [wy, wy + 1].
+ * Grazing a corner or running along an edge does NOT block Line of Effect.
+ */
+export function segmentIntersectsWall(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  wx: number,
+  wy: number,
+): boolean {
+  const eps = 1e-6;
+  const minX = wx + eps;
+  const maxX = wx + 1 - eps;
+  const minY = wy + eps;
+  const maxY = wy + 1 - eps;
+
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+
+  let tMin = 0;
+  let tMax = 1;
+
+  if (Math.abs(dx) < 1e-12) {
+    if (x0 < minX || x0 > maxX) return false;
+  } else {
+    const inv = 1 / dx;
+    let t1 = (minX - x0) * inv;
+    let t2 = (maxX - x0) * inv;
+    if (t1 > t2) [t1, t2] = [t2, t1];
+    tMin = Math.max(tMin, t1);
+    tMax = Math.min(tMax, t2);
+    if (tMin > tMax) return false;
+  }
+
+  if (Math.abs(dy) < 1e-12) {
+    if (y0 < minY || y0 > maxY) return false;
+  } else {
+    const inv = 1 / dy;
+    let t1 = (minY - y0) * inv;
+    let t2 = (maxY - y0) * inv;
+    if (t1 > t2) [t1, t2] = [t2, t1];
+    tMin = Math.max(tMin, t1);
+    tMax = Math.min(tMax, t2);
+    if (tMin > tMax) return false;
+  }
+
+  return tMax > 0 && tMin < 1 && tMin <= tMax;
+}
+
+/**
+ * Checks whether square (i, j) has unobstructed Line of Effect from the AoE origin.
+ */
+export function hasLineOfEffect(
+  i: number,
+  j: number,
+  config: AoEConfig,
+  originIntersection: GridIntersection | null,
+): boolean {
+  const walls = config.walls;
+  if (!walls || walls.size === 0) return true;
+  if (walls.has(wallKey(i, j))) return false;
+
+  const targetX = i + 0.5;
+  const targetY = j + 0.5;
+
+  const wallCoords: [number, number][] = [];
+  for (const key of walls) {
+    const parsed = parseWallKey(key);
+    if (parsed && !(parsed[0] === i && parsed[1] === j)) {
+      wallCoords.push(parsed);
+    }
+  }
+
+  const rayClear = (ox: number, oy: number): boolean => {
+    for (const [wx, wy] of wallCoords) {
+      if (segmentIntersectsWall(ox, oy, targetX, targetY, wx, wy)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  if (config.type === "burst") {
+    return rayClear(0, 0);
+  }
+  if (config.type === "cone" && originIntersection) {
+    return rayClear(originIntersection.x, originIntersection.y);
+  }
+  // Emanation: clear if any square of the caster has Line of Effect to the target
+  for (let cx = 0; cx < config.tokenSize; cx++) {
+    for (let cy = 0; cy < config.tokenSize; cy++) {
+      if (rayClear(cx + 0.5, cy + 0.5)) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -413,6 +528,7 @@ export function computeAoEGrid(config: AoEConfig): AoEGridResult {
     hiY = loY + side;
   }
 
+  const walls = config.walls;
   const cells: GridCell[] = [];
   let tokenCount = 0;
   let affectedCount = 0;
@@ -432,17 +548,42 @@ export function computeAoEGrid(config: AoEConfig): AoEGridResult {
         continue;
       }
 
+      if (walls?.has(wallKey(i, j))) {
+        const distanceFt =
+          type === "burst"
+            ? pf2eIntersectionDistance(i, j, 0, 0)
+            : pf2eDistance(i, j, tokenSize);
+        cells.push({
+          i,
+          j,
+          kind: "wall",
+          distanceFt,
+          maxElevationFt: null,
+        });
+        continue;
+      }
+
       if (type === "emanation") {
         const distanceFt = pf2eDistance(i, j, tokenSize);
         if (distanceFt <= sizeFt) {
-          affectedCount++;
-          const maxElevationFt = computeMaxElevationFt(
-            i,
-            j,
-            config,
-            originIntersection,
-          );
-          cells.push({ i, j, kind: "affected", distanceFt, maxElevationFt });
+          if (hasLineOfEffect(i, j, config, originIntersection)) {
+            affectedCount++;
+            const maxElevationFt = computeMaxElevationFt(
+              i,
+              j,
+              config,
+              originIntersection,
+            );
+            cells.push({ i, j, kind: "affected", distanceFt, maxElevationFt });
+          } else {
+            cells.push({
+              i,
+              j,
+              kind: "blocked",
+              distanceFt,
+              maxElevationFt: null,
+            });
+          }
         } else {
           cells.push({
             i,
@@ -455,14 +596,24 @@ export function computeAoEGrid(config: AoEConfig): AoEGridResult {
       } else if (type === "burst") {
         const distanceFt = pf2eIntersectionDistance(i, j, 0, 0);
         if (distanceFt <= sizeFt) {
-          affectedCount++;
-          const maxElevationFt = computeMaxElevationFt(
-            i,
-            j,
-            config,
-            originIntersection,
-          );
-          cells.push({ i, j, kind: "affected", distanceFt, maxElevationFt });
+          if (hasLineOfEffect(i, j, config, originIntersection)) {
+            affectedCount++;
+            const maxElevationFt = computeMaxElevationFt(
+              i,
+              j,
+              config,
+              originIntersection,
+            );
+            cells.push({ i, j, kind: "affected", distanceFt, maxElevationFt });
+          } else {
+            cells.push({
+              i,
+              j,
+              kind: "blocked",
+              distanceFt,
+              maxElevationFt: null,
+            });
+          }
         } else {
           cells.push({
             i,
@@ -483,14 +634,24 @@ export function computeAoEGrid(config: AoEConfig): AoEGridResult {
           sizeFt,
         );
         if (affected) {
-          affectedCount++;
-          const maxElevationFt = computeMaxElevationFt(
-            i,
-            j,
-            config,
-            originIntersection,
-          );
-          cells.push({ i, j, kind: "affected", distanceFt, maxElevationFt });
+          if (hasLineOfEffect(i, j, config, originIntersection)) {
+            affectedCount++;
+            const maxElevationFt = computeMaxElevationFt(
+              i,
+              j,
+              config,
+              originIntersection,
+            );
+            cells.push({ i, j, kind: "affected", distanceFt, maxElevationFt });
+          } else {
+            cells.push({
+              i,
+              j,
+              kind: "blocked",
+              distanceFt,
+              maxElevationFt: null,
+            });
+          }
         } else {
           cells.push({
             i,
@@ -591,7 +752,11 @@ export function isEnemyHitByAoE(
         }
       }
       const maxElev = computeMaxElevationFt(x, y, config, originIntersection);
-      if (maxElev !== null && elevationFt <= maxElev) {
+      if (
+        maxElev !== null &&
+        elevationFt <= maxElev &&
+        hasLineOfEffect(x, y, config, originIntersection)
+      ) {
         return true;
       }
     }
@@ -630,12 +795,20 @@ export function canPlaceEnemy(
   hiX: number,
   loY: number,
   hiY: number,
+  walls?: ReadonlySet<string>,
 ): boolean {
   if (i < loX || j < loY || i + size > hiX || j + size > hiY) {
     return false;
   }
   if (hasCaster && rectsOverlap(i, j, size, 0, 0, casterSize)) {
     return false;
+  }
+  if (walls && walls.size > 0) {
+    for (let x = i; x < i + size; x++) {
+      for (let y = j; y < j + size; y++) {
+        if (walls.has(wallKey(x, y))) return false;
+      }
+    }
   }
   for (const enemy of existingEnemies) {
     if (rectsOverlap(i, j, size, enemy.i, enemy.j, enemy.size)) {

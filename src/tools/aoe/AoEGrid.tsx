@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   canPlaceEnemy,
   enemyDistanceToOrigin,
   isEnemyHitByAoE,
+  wallKey,
   type AoEConfig,
   type AoEGridResult,
   type EnemyToken,
@@ -10,22 +11,30 @@ import {
   type TokenSizeName,
 } from "../../lib/pf2e/grid";
 
+export type MapInteractMode = "enemy" | "wall";
+
 interface AoEGridProps {
   config: AoEConfig;
   sizeLabel: TokenSizeName;
   includeToken: boolean;
   showElevation: boolean;
+  interactMode: MapInteractMode;
   grid: AoEGridResult;
   enemies: readonly EnemyToken[];
+  walls: ReadonlySet<string>;
   enemyPlaceSize: number;
   onPlaceEnemy: (i: number, j: number) => void;
   onRemoveEnemy: (id: number) => void;
+  onSetWall: (i: number, j: number, add: boolean) => void;
+  svgRef?: RefObject<SVGSVGElement | null>;
 }
 
 const CELL_CLASS: Record<GridCell["kind"], string> = {
   empty: "fill-stone-100 dark:fill-zinc-900",
   token: "fill-blue-600 dark:fill-blue-500",
   affected: "fill-amber-500 dark:fill-amber-500/85",
+  wall: "fill-stone-700 dark:fill-zinc-500",
+  blocked: "fill-stone-300/70 dark:fill-zinc-800/90",
 };
 
 const AOE_TITLES: Record<AoEConfig["type"], string> = {
@@ -39,13 +48,27 @@ export function AoEGrid({
   sizeLabel,
   includeToken,
   showElevation,
+  interactMode,
   grid,
   enemies,
+  walls,
   enemyPlaceSize,
   onPlaceEnemy,
   onRemoveEnemy,
+  onSetWall,
+  svgRef,
 }: AoEGridProps) {
   const [hovered, setHovered] = useState<GridCell | null>(null);
+  const paintActionRef = useRef<"add" | "remove" | null>(null);
+
+  useEffect(() => {
+    const handleMouseUp = () => {
+      paintActionRef.current = null;
+    };
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => window.removeEventListener("mouseup", handleMouseUp);
+  }, []);
+
   const {
     cells,
     loX,
@@ -68,6 +91,7 @@ export function AoEGrid({
   const hoveredEnemy = hovered ? findEnemyAt(hovered.i, hovered.j) : undefined;
 
   const canPlaceAtHovered =
+    interactMode === "enemy" &&
     hovered !== null &&
     !hoveredEnemy &&
     canPlaceEnemy(
@@ -81,9 +105,21 @@ export function AoEGrid({
       hiX,
       loY,
       hiY,
+      walls,
     );
 
-  const handleCellClick = (cell: GridCell) => {
+  const canPaintWallAt = (cell: GridCell) =>
+    cell.kind !== "token" && !findEnemyAt(cell.i, cell.j);
+
+  const handleCellMouseDown = (cell: GridCell) => {
+    if (interactMode === "wall") {
+      if (!canPaintWallAt(cell)) return;
+      const shouldAdd = !walls.has(wallKey(cell.i, cell.j));
+      paintActionRef.current = shouldAdd ? "add" : "remove";
+      onSetWall(cell.i, cell.j, shouldAdd);
+      return;
+    }
+
     const existing = findEnemyAt(cell.i, cell.j);
     if (existing) {
       onRemoveEnemy(existing.id);
@@ -101,9 +137,21 @@ export function AoEGrid({
         hiX,
         loY,
         hiY,
+        walls,
       )
     ) {
       onPlaceEnemy(cell.i, cell.j);
+    }
+  };
+
+  const handleCellMouseEnter = (cell: GridCell) => {
+    setHovered(cell);
+    if (
+      interactMode === "wall" &&
+      paintActionRef.current !== null &&
+      canPaintWallAt(cell)
+    ) {
+      onSetWall(cell.i, cell.j, paintActionRef.current === "add");
     }
   };
 
@@ -123,12 +171,16 @@ export function AoEGrid({
           {titlePrefix}
         </h2>
         <span className="text-xs text-stone-500 dark:text-zinc-400">
-          Click map to drop/remove enemy · 1 sq = 5 ft
+          {interactMode === "wall"
+            ? "Click & drag to paint/erase walls"
+            : "Click map to drop/remove enemy"}{" "}
+          · 1 sq = 5 ft
         </span>
       </div>
 
       <div className="relative mx-auto w-full max-w-[560px] aspect-square overflow-hidden rounded-lg border border-stone-300 dark:border-zinc-700 bg-stone-200 dark:bg-zinc-800">
         <svg
+          ref={svgRef}
           viewBox={`0 0 ${cols} ${rows}`}
           className="h-full w-full block select-none cursor-crosshair"
           role="img"
@@ -155,8 +207,11 @@ export function AoEGrid({
                     ? "stroke-stone-950 dark:stroke-white"
                     : "stroke-stone-300/90 dark:stroke-zinc-700/80"
                 }`}
-                onMouseEnter={() => setHovered(cell)}
-                onClick={() => handleCellClick(cell)}
+                onMouseEnter={() => handleCellMouseEnter(cell)}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  handleCellMouseDown(cell);
+                }}
               />
             );
           })}
@@ -189,8 +244,8 @@ export function AoEGrid({
               );
             })}
 
-          {/* Placement ghost preview */}
-          {hovered && !hoveredEnemy && (
+          {/* Placement ghost preview (enemy mode) */}
+          {interactMode === "enemy" && hovered && !hoveredEnemy && (
             <rect
               x={hovered.i - loX}
               y={hiY - hovered.j - enemyPlaceSize}
@@ -233,8 +288,13 @@ export function AoEGrid({
             return (
               <g
                 key={enemy.id}
-                className="cursor-pointer"
-                onClick={(e) => {
+                className={
+                  interactMode === "enemy"
+                    ? "cursor-pointer"
+                    : "pointer-events-none"
+                }
+                onMouseDown={(e) => {
+                  if (interactMode !== "enemy") return;
                   e.stopPropagation();
                   onRemoveEnemy(enemy.id);
                 }}
@@ -322,8 +382,8 @@ export function AoEGrid({
             ·{" "}
             {isEnemyHitByAoE(hoveredEnemy, config, includeToken)
               ? "Hit by AoE"
-              : "Safe (outside)"}{" "}
-            · Click to remove
+              : "Safe (outside / blocked)"}{" "}
+            {interactMode === "enemy" ? "· Click to remove" : ""}
           </span>
         ) : hovered ? (
           <span>
@@ -331,8 +391,11 @@ export function AoEGrid({
             <strong className="font-semibold text-stone-900 dark:text-zinc-100">
               {hovered.kind === "token"
                 ? "Caster space (0 ft)"
-                : `${hovered.distanceFt} ft from ${originLabel}`}
+                : hovered.kind === "wall"
+                  ? "Wall (blocks Line of Effect)"
+                  : `${hovered.distanceFt} ft from ${originLabel}`}
             </strong>
+            {hovered.kind === "blocked" && " · Blocked by wall"}
             {showElevation && hovered.maxElevationFt !== null && (
               <>
                 {" "}
@@ -341,18 +404,13 @@ export function AoEGrid({
                   {hovered.maxElevationFt} ft
                 </strong>
               </>
-            )}{" "}
-            ·{" "}
-            {canPlaceAtHovered
-              ? "Click to drop enemy"
-              : hovered.kind === "token"
-                ? "Origin"
-                : "Cannot place here"}
+            )}
           </span>
         ) : (
           <span>
-            Hover to inspect distance · Click any open square to drop an enemy
-            token
+            {interactMode === "wall"
+              ? "Click and drag on open squares to paint or erase Line-of-Effect walls"
+              : "Hover to inspect distance · Click any open square to drop an enemy token"}
           </span>
         )}
       </div>
@@ -375,6 +433,18 @@ export function AoEGrid({
           <span className="h-3.5 w-3.5 rounded-xs bg-amber-500 border border-stone-400/50 dark:border-zinc-600" />
           {AOE_TITLES[config.type]} ({affectedCount} sq)
         </span>
+        {walls.size > 0 && (
+          <>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-3.5 w-3.5 rounded-xs bg-stone-700 dark:bg-zinc-500 border border-stone-400/50 dark:border-zinc-600" />
+              Wall ({walls.size})
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-3.5 w-3.5 rounded-xs bg-stone-300/80 dark:bg-zinc-800 border border-stone-400/50 dark:border-zinc-600" />
+              Blocked LoE
+            </span>
+          </>
+        )}
         <span className="inline-flex items-center gap-1.5">
           <span className="h-3.5 w-3.5 rounded-full bg-crimson-600 border border-stone-400/60 dark:border-amber-200/70" />
           Enemy (Hit)

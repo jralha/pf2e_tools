@@ -207,6 +207,30 @@ describe("enemy token helpers", () => {
       isEnemyHitByAoE({ i: 2, j: 0, size: 1, elevationFt: 10 }, cone15E),
     ).toBe(false);
   });
+
+  it("blocks Line of Effect behind walls in bursts, cones, and emanations", () => {
+    const walls = new Set(["1,0"]);
+    const emanation10: AoEConfig = {
+      type: "emanation",
+      tokenSize: 1,
+      sizeFt: 10,
+      direction: "E",
+      walls,
+    };
+    const grid = computeAoEGrid(emanation10);
+    const kindAt = (i: number, j: number) =>
+      grid.cells.find((c) => c.i === i && c.j === j)?.kind;
+
+    expect(kindAt(1, 0)).toBe("wall");
+    expect(kindAt(2, 0)).toBe("blocked"); // directly behind wall
+    expect(kindAt(1, 1)).toBe("affected"); // grazing corner does not block
+    expect(
+      isEnemyHitByAoE({ i: 2, j: 0, size: 1, elevationFt: 0 }, emanation10),
+    ).toBe(false);
+    expect(
+      isEnemyHitByAoE({ i: 1, j: 1, size: 1, elevationFt: 0 }, emanation10),
+    ).toBe(true);
+  });
 });
 
 describe("3D distance and max elevation", () => {

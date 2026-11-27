@@ -1,9 +1,11 @@
+import type { RefObject } from "react";
 import type { SideCellKind, VerticalAoEResult } from "../../lib/pf2e/vertical";
 
 interface SideViewGridProps {
   title: string;
   originLabel: string;
   result: VerticalAoEResult;
+  svgRef?: RefObject<SVGSVGElement | null>;
 }
 
 const SIDE_CELL_CLASS: Record<SideCellKind, string> = {
@@ -16,6 +18,7 @@ export function SideViewGrid({
   title,
   originLabel,
   result,
+  svgRef,
 }: SideViewGridProps) {
   const { sideCells, sideLoX, sideHiX, sideMaxZ, sideOrigin } = result;
   const cols = sideHiX - sideLoX;
@@ -53,6 +56,7 @@ export function SideViewGrid({
 
       <div className="relative mx-auto w-full max-w-[560px] overflow-hidden rounded-lg border border-stone-300 dark:border-zinc-700 bg-stone-50 dark:bg-zinc-950">
         <svg
+          ref={svgRef}
           viewBox={`0 0 ${totalW} ${totalH}`}
           className="h-auto w-full block select-none"
           role="img"
